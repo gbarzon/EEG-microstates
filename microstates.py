@@ -252,6 +252,7 @@ def plot_segmentation(segmentation, data, times, polarity=None):
     plt.title('Segmentation into %d microstates' % n_states)
     plt.autoscale(tight=True)
     plt.tight_layout()
+    plt.show()
 
 
 def plot_maps(maps, info):
@@ -269,3 +270,5 @@ def plot_maps(maps, info):
         plt.subplot(1, len(maps), i + 1)
         mne.viz.plot_topomap(map, info)
         plt.title('%d' % i)
+        
+    plt.show()

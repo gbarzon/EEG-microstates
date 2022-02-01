@@ -78,16 +78,130 @@ def segment(data, n_states=4, n_inits=10, max_iter=1000, thresh=1e-6,
            estimation and validation. IEEE Transactions on Biomedical
            Engineering.
     """
+    logger.info('[+] EEG microstates\n')
+    logger.info('Data shape: (%d,%d)' % (data.shape[0],data.shape[1]))
+    logger.info('Finding %d microstates, using %d random intitializations' %
+                (n_states, n_inits))
+    
+    gfp = np.std(data, axis=0)
+    
+    if normalize:
+        gfp = zscore(gfp, axis=1)
+    
+    # Limit the number of peaks by randomly selecting them
+    n_peaks = len(gfp)
+    chosen_peaks = np.arange(0,n_peaks)
+    if max_n_peaks is not None:
+        max_n_peaks = min(n_peaks, max_n_peaks)
+        if not isinstance(random_state, np.random.RandomState):
+            random_state = np.random.RandomState(random_state)
+        chosen_peaks = random_state.choice(chosen_peaks, size=max_n_peaks,
+                                           replace=False)
+    
+    # Cache this value for later
+    gfp_sum_sq = np.sum(gfp ** 2)
+
+    # Do several runs of the k-means algorithm, keep track of the best
+    # segmentation.
+    best_gev = 0
+    best_maps = None
+    best_segmentation = None
+    best_polarity = None
+    
+    for _ in range(n_inits):
+        maps = _mod_kmeans(data[:,chosen_peaks], n_states, n_inits, max_iter, thresh,
+                           random_state, verbose)
+        activation = maps.dot(data)
+        segmentation = np.argmax(np.abs(activation), axis=0)
+        map_corr = _corr_vectors(data, maps[segmentation].T)
+        # assigned_activations = np.choose(segmentations, activation)
+
+        # Compare across iterations using global explained variance (GEV) of
+        # the found microstates.
+        gev = sum((gfp * map_corr) ** 2) / gfp_sum_sq *100
+        logger.info('GEV of found microstates: %f %%' % gev)
+        if gev > best_gev:
+            best_gev, best_maps, best_segmentation = gev, maps, segmentation
+            best_polarity = np.sign(np.choose(segmentation, activation))
+    
+    logger.info('Best GEV of found microstates: %f %%' % best_gev)
+    
+    if return_polarity:
+        return best_maps, best_segmentation, best_polarity
+    else:
+        return best_maps, best_segmentation
+
+@verbose
+def old_segment(data, n_states=4, n_inits=10, max_iter=1000, thresh=1e-6,
+            normalize=False, min_peak_dist=2, max_n_peaks=10000,
+            return_polarity=False, random_state=None, verbose=None):
+    """Segment a continuous signal into microstates.
+    Peaks in the global field power (GFP) are used to find microstates, using a
+    modified K-means algorithm. Several runs of the modified K-means algorithm
+    are performed, using different random initializations. The run that
+    resulted in the best segmentation, as measured by global explained variance
+    (GEV), is used.
+    Parameters
+    ----------
+    data : ndarray, shape (n_channels, n_samples)
+        The data to find the microstates in
+    n_states : int
+        The number of unique microstates to find. Defaults to 4.
+    n_inits : int
+        The number of random initializations to use for the k-means algorithm.
+        The best fitting segmentation across all initializations is used.
+        Defaults to 10.
+    max_iter : int
+        The maximum number of iterations to perform in the k-means algorithm.
+        Defaults to 1000.
+    thresh : float
+        The threshold of convergence for the k-means algorithm, based on
+        relative change in noise variance. Defaults to 1e-6.
+    normalize : bool
+        Whether to normalize (z-score) the data across time before running the
+        k-means algorithm. Defaults to ``False``.
+    min_peak_dist : int
+        Minimum distance (in samples) between peaks in the GFP. Defaults to 2.
+    max_n_peaks : int | None
+        Maximum number of GFP peaks to use in the k-means algorithm. Chosen
+        randomly. Set to ``None`` to use all peaks. Defaults to 10000.
+    return_polarity : bool
+        Whether to return the polarity of the activation.
+        Defaults to ``False``.
+    random_state : int | numpy.random.RandomState | None
+        The seed or ``RandomState`` for the random number generator. Defaults
+        to ``None``, in which case a different seed is chosen each time this
+        function is called.
+    verbose : int | bool | None
+        Controls the verbosity.
+    Returns
+    -------
+    maps : ndarray, shape (n_channels, n_states)
+        The topographic maps of the found unique microstates.
+    segmentation : ndarray, shape (n_samples,)
+        For each sample, the index of the microstate to which the sample has
+        been assigned.
+    polarity : ndarray, shape (n_samples,)
+        For each sample, the polarity (+1 or -1) of the activation on the
+        currently activate map.
+    References
+    ----------
+    .. [1] Pascual-Marqui, R. D., Michel, C. M., & Lehmann, D. (1995).
+           Segmentation of brain electrical activity into microstates: model
+           estimation and validation. IEEE Transactions on Biomedical
+           Engineering.
+    """
     logger.info('Finding %d microstates, using %d random intitializations' %
                 (n_states, n_inits))
 
     if normalize:
         data = zscore(data, axis=1)
-
+    
     # Find peaks in the global field power (GFP)
     gfp = np.std(data, axis=0)
     peaks, _ = find_peaks(gfp, distance=min_peak_dist)
     n_peaks = len(peaks)
+    logger.info('Number of GFP peaks: %d' % n_peaks)
 
     # Limit the number of peaks by randomly selecting them
     if max_n_peaks is not None:
@@ -122,7 +236,9 @@ def segment(data, n_states=4, n_inits=10, max_iter=1000, thresh=1e-6,
         if gev > best_gev:
             best_gev, best_maps, best_segmentation = gev, maps, segmentation
             best_polarity = np.sign(np.choose(segmentation, activation))
-
+    
+    logger.info('Best GEV of found microstates: %f' % best_gev)
+    
     if return_polarity:
         return best_maps, best_segmentation, best_polarity
     else:
@@ -265,10 +381,9 @@ def plot_maps(maps, info):
         The info structure of the dataset, containing the location of the
         sensors.
     """
-    plt.figure(figsize=(2 * len(maps), 2))
+    plt.figure(figsize=(4 * len(maps), 4))
     for i, map in enumerate(maps):
         plt.subplot(1, len(maps), i + 1)
-        mne.viz.plot_topomap(map, info)
         plt.title('%d' % i)
-        
+        mne.viz.plot_topomap(map, info, show=False)
     plt.show()

@@ -1,5 +1,7 @@
 *.set
+*.npy
 .DS_Store
 SB_toolbox-main/
 .ipynb_checkpoints/
 __pycache__/
+data/

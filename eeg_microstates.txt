@@ -1,0 +1,7 @@
+EEG clustering approaches
+* sequential
+* global
+
+GFP smoothing for peak identification
+
+http://www.thomaskoenig.ch/index.php/software/microstates-in-eeglab/getting-started
